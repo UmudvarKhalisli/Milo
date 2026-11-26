@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Milo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0f1a; overflow: hidden; font-family: sans-serif; }
+  #face { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6vh; }
+  #eyes { display: flex; gap: 12vw; cursor: pointer; }
+  .eye {
+    width: 22vw; max-width: 160px; height: 22vw; max-height: 160px;
+    background: #7fe9ff; border-radius: 50%;
+    box-shadow: 0 0 40px #7fe9ff88;
+    transition: height .12s ease, border-radius .2s ease, transform .2s ease;
+  }
+  .eye.blink { height: 6px !important; }
+  .eye.sleep { height: 8px; }
+  .eye.smile { border-radius: 50% 50% 50% 50% / 20% 20% 80% 80%; height: 11vw; transform: translateY(2vh); }
+  .eye.wink { height: 6px; }
+  #status { color: #8fa3c7; font-size: 15px; text-align: center; padding: 0 20px; min-height: 40px; }
+  #heard { color: #5b6b8c; font-size: 13px; text-align: center; padding: 0 20px; min-height: 20px; }
+  #lang { position: fixed; bottom: 12px; right: 12px; background: #1a2238; color: #8fa3c7; border: 0; border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  .talking .eye { animation: talk .35s infinite alternate; }
+  @keyframes talk { from { transform: scale(1); } to { transform: scale(1.08); } }
+  @media (prefers-reduced-motion: reduce) { .talking .eye { animation: none; } }
+</style>
+</head>
+<body>
+<div id="face">
+  <div id="eyes"><div class="eye sleep" id="L"></div><div class="eye sleep" id="R"></div></div>
+  <div id="status">Ekrana toxun, sonra "Milo" de</div>
+  <div id="heard"></div>
+</div>
+<button id="lang">dil: az-AZ</button>
+
+<script>
+const L = document.getElementById('L');
+const R = document.getElementById('R');
+const face = document.getElementById('face');
+const statusEl = document.getElementById('status');
+const heardEl = document.getElementById('heard');
+const langBtn = document.getElementById('lang');
+
+const WAKE_WORDS = ['milo', 'milu', 'mila', 'mıllo', 'millo', 'mello'];
+const LANGS = ['az-AZ', 'tr-TR', 'en-US'];
+let langIndex = 0;
+let awake = false;
+let speaking = false;
+let started = false;
+let sleepTimer = null;
+
+function setStatus(t) { statusEl.textContent = t; }
+
+// ---- Gözlər ----
+function eyes(cls, on) { [L, R].forEach(e => e.classList.toggle(cls, on)); }
+
+function blink() {
+  if (!awake) return;
+  eyes('blink', true);
+  setTimeout(() => eyes('blink', false), 140);
+}
+setInterval(() => { if (Math.random() < 0.6) blink(); }, 3200);
+
+function wink() {
+  R.classList.add('wink');
+  setTimeout(() => R.classList.remove('wink'), 450);
+}
+
+function smile() {
+  eyes('smile', true);
+  setTimeout(() => eyes('smile', false), 1500);
+}
+
+function wakeUp() {
+  awake = true;
+  eyes('sleep', false);
+  smile();
+  resetSleep();
+}
+
+function goToSleep() {
+  awake = false;
+  eyes('sleep', true);
+  setStatus('Yuxudayam. "Milo" de.');
+}
+
+function resetSleep() {
+  clearTimeout(sleepTimer);
+  sleepTimer = setTimeout(goToSleep, 25000);
+}
+
+// ---- Səs çıxışı ----
+function speak(text) {
+  if (!('speechSynthesis' in window)) { setStatus('Bu brauzer səsləndirmir.'); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = LANGS[langIndex];
+  u.onstart = () => { speaking = true; face.classList.add('talking'); };
+  u.onend = () => { speaking = false; face.classList.remove('talking'); };
+  u.onerror = () => { speaking = false; face.classList.remove('talking'); };
+  speechSynthesis.speak(u);
+}
+
+// ---- Səs girişi ----
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+
+function buildRecognizer() {
+  if (!SR) { setStatus('Bu brauzer səs tanımır. Android-də Chrome işlət.'); return; }
+  if (rec) { rec.onend = null; try { rec.stop(); } catch (e) {} }
+  rec = new SR();
+  rec.lang = LANGS[langIndex];
+  rec.continuous = true;
+  rec.interimResults = false;
+
+  rec.onresult = (ev) => {
+    const text = ev.results[ev.results.length - 1][0].transcript.trim();
+    heardEl.textContent = 'Eşitdim: ' + text;
+    if (speaking) return;
+    const lower = text.toLowerCase();
+    if (!awake) {
+      const hit = WAKE_WORDS.find(w => lower.includes(w));
+      if (hit) {
+        wakeUp();
+        const rest = lower.split(hit).pop().trim();
+        if (rest.length > 2) handle(rest); else { setStatus('Bəli?'); speak('Bəli, Ümüd?'); }
+      }
+      return;
+    }
+    resetSleep();
+    handle(text);
+  };
+
+  rec.onend = () => { if (started) { try { rec.start(); } catch (e) {} } };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setStatus('Mikrofon icazəsi lazımdır. Brauzer ayarlarından ver.');
+    else if (e.error === 'language-not-supported') setStatus('Bu dil dəstəklənmir. Sağ aşağıda dili dəyiş.');
+    else if (e.error !== 'no-speech' && e.error !== 'aborted') setStatus('Səs xətası: ' + e.error);
+  };
+  if (started) { try { rec.start(); } catch (e) {} }
+}
+
+// ---- Cavab məntiqi (sınaq rejimi, Claude hələ yoxdur) ----
+function handle(text) {
+  setStatus('Dedin: ' + text);
+  if (/göz vur/i.test(text)) { wink(); speak('Göz vurdum!'); return; }
+  if (/gülümsə/i.test(text)) { smile(); speak('Mən gülümsəyirəm.'); return; }
+  speak('Sən dedin: ' + text);
+}
+
+// ---- Başlatma ----
+function start() {
+  if (started) return;
+  started = true;
+  buildRecognizer();
+  setStatus('Dinləyirəm. "Milo" de.');
+}
+document.body.addEventListener('click', start);
+
+// Gözlərə toxunsan əl ilə oyanır (səs tanıma işləməsə belə gözləri yoxlamaq üçün)
+document.getElementById('eyes').addEventListener('click', () => {
+  if (!awake) { wakeUp(); setStatus('Əl ilə oyatdın.'); speak('Salam, mən Milo.'); }
+  else { wink(); }
+});
+
+langBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  langIndex = (langIndex + 1) % LANGS.length;
+  langBtn.textContent = 'dil: ' + LANGS[langIndex];
+  buildRecognizer();
+});
+</script>
+</body>
+</html>
